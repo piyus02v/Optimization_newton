@@ -1,137 +1,242 @@
-#include <bits/stdc++.h>
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <random>
+#include <utility>
+#include <Eigen/Dense>
+
 using namespace std;
+using namespace Eigen;
 
-
- 
-double random_double(double a, double b) {
-    static std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> dist(a, b);
-    
+// Generate a random number between a and b
+double random_double(double a, double b)
+{
+    random_device rd;
+    mt19937 rng(rd());
+    uniform_real_distribution<double> dist(a, b);
     return dist(rng);
 }
-double func(double x)
-{
-    //return -(pow((2*x-5),4)-pow((x*x-1),3));
-    //return -(8+x*x*x-2*x-2*exp(x));
-    //return -(4*x*sin(x));
-    //return 2*pow(x-3,2)+exp(0.5*x*x);
-    //return x*x-10*exp(0.1*x);
-    return -(20*sin(x)-15*x*x);
-    
-}
-double fdash(double x)
-{
-    //return 8*pow((2*x-5),3)-6*x*pow((x*x-1),2);
-    //return 3*x*x-2-2*exp(x);
-    //return 4*sin(x)+4*x*cos(x);
-    //return 4*(x-3)+0.5*x*exp(0.5*x*x);
-    //return 2*x-exp(0.1*x);
-    return 20*cos(x)-30*x;
-    
-    
-    
-}
-pair<double, double> bounding_phase(double lb, double ub,double delta) {
-    
 
-    // Initial random point
-    double x = random_double(lb,ub);
-    std::cout << "Starting value: " << x << std::endl;
+// Function to minimize (Sum of Squares)
+double func(const VectorXd &x)
+{
+    double result = 0.0;
+    for (int i = 0; i < x.size(); ++i)
+    {
+        result += (i + 1) * x[i] * x[i];
+    }
+    return result;
+}
+
+// Gradient of the Sum of Squares function
+VectorXd gradient(const VectorXd &x)
+{
+    VectorXd grad(x.size());
+    for (int i = 0; i < x.size(); ++i)
+    {
+        grad[i] = 2 * (i + 1) * x[i];
+    }
+    return grad;
+}
+
+// Hessian of the Sum of Squares function
+MatrixXd hessian(const VectorXd &x)
+{
+    MatrixXd hess = MatrixXd::Zero(x.size(), x.size());
+    for (int i = 0; i < x.size(); ++i)
+    {
+        hess(i, i) = 2 * (i + 1);
+    }
+    return hess;
+}
+
+// Bounding Phase Method for unidirectional search
+pair<double, double> bounding_phase(double lb, double ub, double delta, const VectorXd &x, const VectorXd &p)
+{
+    double alpha = random_double(lb, ub); // Initial random point
+    cout << "Starting value: " << alpha << endl;
 
     double dx = delta;
-    double x_lb = x - dx;
-    double x_ub = x + dx;
-    double f_x = func(x);
-    double f_x_lb = func(x_lb);
-    double f_x_ub = func(x_ub);
+    double alpha_lb = max(alpha - dx, lb);
+    double alpha_ub = min(alpha + dx, ub);
+    double f_alpha = func(x + alpha * p), f_alpha_lb = func(x + alpha_lb * p), f_alpha_ub = func(x + alpha_ub * p);
     int k = 0;
 
-    // Ensure that the interval is within bounds
-    x_lb = std::max(x_lb, lb);
-    x_ub = std::min(x_ub, ub);
-
-    while (x_ub <= ub && x_lb >= lb) {
-        if (f_x <= f_x_lb && f_x >= f_x_ub) {
-            dx = std::abs(dx);
-        } else if (f_x >= f_x_lb && f_x <= f_x_ub) {
-            dx = -std::abs(dx);
-        }
+    while (alpha_ub <= ub && alpha_lb >= lb)
+    {
+        dx = (f_alpha <= f_alpha_lb && f_alpha >= f_alpha_ub) ? abs(dx) : -abs(dx);
 
         k++;
-        double x_n = x + std::pow(2, k) * dx;
-        double f_x_n = func(x_n);
+        double alpha_new = alpha + pow(2, k) * dx;
+        if (alpha_new > ub)
+            alpha_new = ub;
+        if (alpha_new < lb)
+            alpha_new = lb;
 
-        if (f_x_n > f_x) {
-            if (x_n > ub) x_n = ub;
-            if (x_n < lb) x_n = lb;
-            return {x, x_n};
+        if (func(x + alpha_new * p) > f_alpha)
+        {
+            return {alpha, alpha_new};
         }
 
-        x = x_n;
-        x_ub = std::min(x + std::abs(dx), ub);
-        x_lb = std::max(x - std::abs(dx), lb);
-        f_x = f_x_n;
-        f_x_lb = func(x_lb);
-        f_x_ub = func(x_ub);
+        alpha = alpha_new;
+        alpha_ub = min(alpha + abs(dx), ub);
+        alpha_lb = max(alpha - abs(dx), lb);
+        f_alpha = func(x + alpha * p);
+        f_alpha_lb = func(x + alpha_lb * p);
+        f_alpha_ub = func(x + alpha_ub * p);
     }
 
-    return {x, x};
+    return {alpha, alpha};
 }
 
-double secantmethod(double a,double b,double e)
+// Secant Method for finding the optimal step size
+double secant_method(double alpha1, double alpha2, double epsilon, const VectorXd &x, const VectorXd &p)
 {
-    double x1=a;
-    double x2=b;
     double z;
-    int t=1;
-    while(true)
+    int max_iter = 100; // Limit the number of iterations
+    int iter = 0;
+
+    while (iter < max_iter)
     {
-        
-        z=x2-fdash(x2)/((fdash(x2)-fdash(x1))/(x2-x1));
-        if(abs((fdash(z)))<=e)
+        // Compute directional derivatives at alpha1 and alpha2
+        double grad_alpha1 = gradient(x + alpha1 * p).dot(p); // directional derivative at alpha1
+        double grad_alpha2 = gradient(x + alpha2 * p).dot(p); // directional derivative at alpha2
+
+        // Prevent division by zero
+        if (abs(grad_alpha2 - grad_alpha1) < 1e-9)
         {
+            cerr << "Warning: Small denominator in Secant Method, stopping early." << endl;
             break;
         }
-        else if(fdash(z)<0)
+
+        // Secant update step for alpha
+        z = alpha2 - grad_alpha2 * ((alpha2 - alpha1) / (grad_alpha2 - grad_alpha1));
+
+        // Check for convergence (small gradient)
+        if (abs(gradient(x + z * p).dot(p)) <= epsilon)
+            break;
+
+        // Update alpha values based on the result
+        if (gradient(x + z * p).dot(p) < grad_alpha2)
         {
-            x1=z;
+            alpha1 = alpha2;
+            alpha2 = z;
         }
         else
         {
-            x2=z;
+            alpha2 = z;
         }
-        
 
+        iter++;
     }
+
     return z;
-
 }
-int main() {
-    
-    double a,b,e,delta;
-    cout<<"Enter upper and lower bounds";
-    cin>>a>>b;
-    cout<<"enter epsilon and delta";
-    cin>>e>>delta;
 
-    
-    
-    for(int i=1;i<=10;i++)
+VectorXd newtons_method(VectorXd x, double epsilon, double delta, const vector<pair<double, double>> &bounds)
+{
+    while (true)
     {
-        cout<<"Run "<<i<<" ->"<<endl;
-        cout<<"Limits after bounding phase method->"<<endl;
-        pair<double,double> p=bounding_phase(a,b,delta);
-        double x=p.first;
-        double y=p.second;
-        cout<<x<<"  "<<y<<endl;
+        VectorXd grad = gradient(x);
+        MatrixXd hess = hessian(x);
 
-        cout<<"Applying secant method we get ->";
-        cout<<secantmethod(x,y,e)<<endl;
+        // Check for convergence
+        if (grad.norm() < epsilon)
+            break;
+
+        // Compute the Newton direction: p = -H^-1 * grad
+        VectorXd p = -hess.inverse() * grad;
+
+        // Debugging output for current state
+        cout << "Current x: " << x.transpose() << endl;
+        cout << "Current gradient: " << grad.transpose() << endl;
+        cout << "Current direction (p): " << p.transpose() << endl;
+
+        // Determine valid alpha range based on bounds of x
+        double alpha_lb = -std::numeric_limits<double>::infinity(); // Start from -infinity for lower bound
+        double alpha_ub = std::numeric_limits<double>::infinity();  // Start from +infinity for upper bound
+
+        for (int i = 0; i < x.size(); ++i)
+        {
+            if (p[i] > 0)
+            {
+                alpha_ub = std::min(alpha_ub, (bounds[i].second - x[i]) / p[i]);
+                alpha_lb = std::max(alpha_lb, (bounds[i].first - x[i]) / p[i]);
+            }
+            else if (p[i] < 0)
+            {
+                alpha_lb = std::max(alpha_lb, (bounds[i].second - x[i]) / p[i]);
+                alpha_ub = std::min(alpha_ub, (bounds[i].first - x[i]) / p[i]);
+            }
+        }
+
+        // Debugging output for alpha bounds
+        cout << "Calculated alpha bounds: [" << alpha_lb << ", " << alpha_ub << "]" << endl;
+
+        // Ensure bounds are valid
+        if (alpha_lb > alpha_ub)
+        {
+            cout << "Invalid alpha bounds: [" << alpha_lb << ", " << alpha_ub << "]. Adjusting bounds." << endl;
+            double t = alpha_lb;
+            alpha_lb = alpha_ub; // Reset to a valid value if invalid
+            alpha_ub = t;
+            cout << "Re-Calculated alpha bounds: [" << alpha_lb << ", " << alpha_ub << "]" << endl;
+        }
+
+        // Perform unidirectional search to find alpha
+        auto alpha_bounds = bounding_phase(alpha_lb, alpha_ub, delta, x, p);
+        cout << "Bounding phase result: [" << alpha_bounds.first << ", " << alpha_bounds.second << "]" << endl;
+
+        // Refine alpha using Secant Method
+        double alpha = secant_method(alpha_bounds.first, alpha_bounds.second, epsilon, x, p);
+        cout << "Secant method result (alpha): " << alpha << endl;
+
+        // Update x: x = x + alpha * p
+        x += alpha * p;
+    }
+    return x;
+}
+
+int main()
+{
+    int n = 5;                              // Number of variables (dimension of the problem)
+    vector<pair<double, double>> bounds(n); // Lower and upper bounds for each variable
+    VectorXd x(n);                          // Initial random point
+    double epsilon, delta;
+
+    // Input bounds for each variable (hypercube range)
+    cout << "Enter the lower and upper bounds for each variable:" << endl;
+    for (int i = 0; i < n; ++i)
+    {
+        cout << "Variable " << i + 1 << " lower bound: ";
+        cin >> bounds[i].first;
+        cout << "Variable " << i + 1 << " upper bound: ";
+        cin >> bounds[i].second;
     }
 
+    // Generate a random initial point within the bounds
+    cout << "Initial random point: ";
+    for (int i = 0; i < n; ++i)
+    {
+        x[i] = random_double(bounds[i].first, bounds[i].second);
+        cout << x[i] << " ";
+    }
+    cout << endl;
 
+    // Input parameters epsilon and delta
+    cout << "Enter epsilon (convergence tolerance) and delta (step size for bounding phase): ";
+    cin >> epsilon >> delta;
+
+    // Perform Newton's method
+    VectorXd result = newtons_method(x, epsilon, delta, bounds);
+
+    // Output final result
+    cout << "Final result: ";
+    for (int i = 0; i < result.size(); ++i)
+    {
+        cout << result[i] << " ";
+    }
+    cout << endl;
+
+    return 0;
 }
-
-
-
-
